@@ -234,20 +234,18 @@ public class TadjikCraftGame extends ApplicationAdapter {
     }
 
     private void applyGravity(float dt) {
-        yVel += gravity * dt;
-        camera.position.y += yVel * dt;
-
         float groundHeight = findGroundHeight(camera.position);
-        if (groundHeight != Float.NEGATIVE_INFINITY && camera.position.y <= groundHeight + camHeight) {
-            camera.position.y = groundHeight + camHeight;
-            yVel = 0;
+        if (groundHeight != Float.NEGATIVE_INFINITY) {
+            if (camera.position.y < groundHeight + camHeight) {
+                camera.position.y = groundHeight + camHeight;
+            }
             onGround = true;
         } else {
             onGround = false;
         }
 
-        if (onGround && Gdx.input.isKeyJustPressed(Input.Keys.SPACE))
-            yVel = 7f;
+        // Гравитация временно отключена, чтобы игрок не падал с платформы
+        yVel = 0f;
     }
 
     private void respawn() {
