@@ -8,11 +8,56 @@ import com.badlogic.gdx.graphics.g3d.*;
 import com.badlogic.gdx.graphics.g3d.attributes.TextureAttribute;
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
+import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector3;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
 
 public class TadjikCraftGame extends ApplicationAdapter {
+
+    private static class BlockPos {
+        final int x;
+        final int y;
+        final int z;
+
+        BlockPos(int x, int y, int z) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof BlockPos)) return false;
+            BlockPos blockPos = (BlockPos) o;
+            return x == blockPos.x && y == blockPos.y && z == blockPos.z;
+        }
+
+        @Override
+        public int hashCode() {
+            int result = x;
+            result = 31 * result + y;
+            result = 31 * result + z;
+            return result;
+        }
+    }
+
+    private static class RaycastHit {
+        final BlockPos pos;
+        final ModelInstance instance;
+        final Vector3 normal;
+        final float distance;
+
+        RaycastHit(BlockPos pos, ModelInstance instance, Vector3 normal, float distance) {
+            this.pos = pos;
+            this.instance = instance;
+            this.normal = normal;
+            this.distance = distance;
+        }
+    }
 
     enum GameState { MENU, GAME, DEAD, PAUSE }
     GameState state = GameState.MENU;
@@ -25,6 +70,7 @@ public class TadjikCraftGame extends ApplicationAdapter {
     int selectedBlock = 0;
 
     ArrayList<ModelInstance> blocks = new ArrayList<>();
+    Map<BlockPos, ModelInstance> blockLookup = new HashMap<>();
 
     float speed = 5f;
     float camHeight = 1.7f;
@@ -43,7 +89,7 @@ public class TadjikCraftGame extends ApplicationAdapter {
         camera = new PerspectiveCamera(67, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
         camera.position.set(0, camHeight, 5);
         camera.near = 0.1f;
-        camera.far = 200;
+        camera.far = 800;
         camera.lookAt(0, camHeight, 0);
         camera.update();
 
@@ -65,12 +111,16 @@ public class TadjikCraftGame extends ApplicationAdapter {
             VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal | VertexAttributes.Usage.TextureCoordinates
         );
 
-        // платформа
-        for (int x = -10; x <= 10; x++) {
-            for (int z = -10; z <= 10; z++) {
-                blocks.add(new ModelInstance(cubeModel, x, 0, z));
+        // платформа 512x512
+        int start = 0;
+        int end = 511;
+        for (int x = start; x <= end; x++) {
+            for (int z = start; z <= end; z++) {
+                addBlockAt(x, 0, z);
             }
         }
+
+        camera.position.set((end - start) / 2f, camHeight + 0.1f, end / 2f + 5);
     }
 
     @Override
@@ -178,15 +228,18 @@ public class TadjikCraftGame extends ApplicationAdapter {
 
         newPos.y = camera.position.y;
 
-        camera.position.set(newPos);
+        if (!isCollidingWithBlock(newPos)) {
+            camera.position.set(newPos);
+        }
     }
 
     private void applyGravity(float dt) {
         yVel += gravity * dt;
         camera.position.y += yVel * dt;
 
-        if (camera.position.y <= camHeight) {
-            camera.position.y = camHeight;
+        float groundHeight = findGroundHeight(camera.position);
+        if (groundHeight != Float.NEGATIVE_INFINITY && camera.position.y <= groundHeight + camHeight) {
+            camera.position.y = groundHeight + camHeight;
             yVel = 0;
             onGround = true;
         } else {
@@ -198,7 +251,7 @@ public class TadjikCraftGame extends ApplicationAdapter {
     }
 
     private void respawn() {
-        camera.position.set(0, camHeight, 5);
+        camera.position.set(256, camHeight + 0.1f, 261);
         yVel = 0;
         state = GameState.GAME;
         Gdx.input.setCursorCatched(true);
@@ -219,48 +272,153 @@ public class TadjikCraftGame extends ApplicationAdapter {
 
     // Raycast ломание и установка
     private void blockRaycast() {
-        Vector3 origin = new Vector3(camera.position);
-        Vector3 dir = new Vector3(camera.direction).nor();
-
-        float max = 4f;
-        ModelInstance hit = null;
-        float best = 999;
-
-        for (ModelInstance m : blocks) {
-            Vector3 p = new Vector3();
-            m.transform.getTranslation(p);
-            float d = origin.dst(p);
-
-            if (d < best && d < max) {
-                best = d;
-                hit = m;
-            }
-        }
-
+        RaycastHit hit = findBlockHit(4f);
         if (hit == null) return;
 
         // ЛОМАНИЕ
         if (Gdx.input.isButtonJustPressed(Input.Buttons.LEFT)) {
-            blocks.remove(hit);
+            removeBlock(hit.pos);
         }
 
         // ПОСТАНОВКА
         if (Gdx.input.isButtonJustPressed(Input.Buttons.RIGHT)) {
-            Vector3 pos = new Vector3();
-            hit.transform.getTranslation(pos);
-
-            Vector3 raw = pos.add(dir.scl(1.1f));
-
-            Vector3 place = new Vector3(
-                (int)Math.floor(raw.x),
-                (int)Math.floor(raw.y),
-                (int)Math.floor(raw.z)
+            BlockPos target = new BlockPos(
+                hit.pos.x + Math.round(hit.normal.x),
+                hit.pos.y + Math.round(hit.normal.y),
+                hit.pos.z + Math.round(hit.normal.z)
             );
-
-
-            ModelInstance newBlock = new ModelInstance(cubeModel, place);
-            blocks.add(newBlock);
+            if (!blockLookup.containsKey(target)) {
+                addBlockAt(target.x, target.y, target.z);
+            }
         }
+    }
+
+    private void addBlockAt(int x, int y, int z) {
+        BlockPos pos = new BlockPos(x, y, z);
+        if (blockLookup.containsKey(pos)) return;
+        ModelInstance inst = new ModelInstance(cubeModel, x, y, z);
+        blockLookup.put(pos, inst);
+        blocks.add(inst);
+    }
+
+    private void removeBlock(BlockPos pos) {
+        ModelInstance inst = blockLookup.remove(pos);
+        if (inst != null) {
+            blocks.remove(inst);
+        }
+    }
+
+    private boolean isCollidingWithBlock(Vector3 desiredPos) {
+        float radius = 0.3f;
+        float feetY = desiredPos.y - camHeight;
+        float headY = desiredPos.y;
+
+        int minX = MathUtils.floor(desiredPos.x - radius - 0.5f);
+        int maxX = MathUtils.ceil(desiredPos.x + radius - 0.5f);
+        int minZ = MathUtils.floor(desiredPos.z - radius - 0.5f);
+        int maxZ = MathUtils.ceil(desiredPos.z + radius - 0.5f);
+        int minY = MathUtils.floor(feetY - 0.1f);
+        int maxY = MathUtils.ceil(headY + 0.1f);
+
+        for (int x = minX; x <= maxX; x++) {
+            for (int y = minY; y <= maxY; y++) {
+                for (int z = minZ; z <= maxZ; z++) {
+                    BlockPos pos = new BlockPos(x, y, z);
+                    if (!blockLookup.containsKey(pos)) continue;
+
+                    float blockMinX = x - 0.5f;
+                    float blockMaxX = x + 0.5f;
+                    float blockMinY = y - 0.5f;
+                    float blockMaxY = y + 0.5f;
+                    float blockMinZ = z - 0.5f;
+                    float blockMaxZ = z + 0.5f;
+
+                    boolean overlapX = desiredPos.x + radius > blockMinX && desiredPos.x - radius < blockMaxX;
+                    boolean overlapZ = desiredPos.z + radius > blockMinZ && desiredPos.z - radius < blockMaxZ;
+                    boolean overlapY = headY > blockMinY && feetY < blockMaxY;
+
+                    if (overlapX && overlapY && overlapZ) return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private float findGroundHeight(Vector3 pos) {
+        int bx = (int)Math.floor(pos.x + 0.5f);
+        int bz = (int)Math.floor(pos.z + 0.5f);
+        int maxY = (int)Math.floor(pos.y);
+
+        for (int y = maxY; y >= -64; y--) {
+            if (blockLookup.containsKey(new BlockPos(bx, y, bz))) {
+                return y + 0.5f;
+            }
+        }
+        return Float.NEGATIVE_INFINITY;
+    }
+
+    private RaycastHit findBlockHit(float maxDistance) {
+        Vector3 origin = new Vector3(camera.position);
+        Vector3 dir = new Vector3(camera.direction).nor();
+
+        RaycastHit bestHit = null;
+
+        for (Map.Entry<BlockPos, ModelInstance> entry : blockLookup.entrySet()) {
+            BlockPos pos = entry.getKey();
+            Vector3 min = new Vector3(pos.x - 0.5f, pos.y - 0.5f, pos.z - 0.5f);
+            Vector3 max = new Vector3(pos.x + 0.5f, pos.y + 0.5f, pos.z + 0.5f);
+
+            float[] tRange = new float[]{0f, maxDistance};
+            Vector3 hitNormal = new Vector3();
+
+            if (!intersectAxis(origin.x, dir.x, min.x, max.x, hitNormal, 1, tRange)) continue;
+            if (!intersectAxis(origin.y, dir.y, min.y, max.y, hitNormal, 2, tRange)) continue;
+            if (!intersectAxis(origin.z, dir.z, min.z, max.z, hitNormal, 3, tRange)) continue;
+
+            float tMin = tRange[0];
+
+            if (tMin < 0 || tMin > maxDistance) continue;
+
+            if (bestHit == null || tMin < bestHit.distance) {
+                bestHit = new RaycastHit(pos, entry.getValue(), new Vector3(hitNormal), tMin);
+            }
+        }
+
+        return bestHit;
+    }
+
+    private boolean intersectAxis(float origin, float dir, float min, float max, Vector3 normal, int axis, float[] tRange) {
+        if (Math.abs(dir) < 0.0001f) {
+            return origin >= min && origin <= max;
+        }
+
+        float invD = 1f / dir;
+        float t0 = (min - origin) * invD;
+        float t1 = (max - origin) * invD;
+
+        int normalDir = invD >= 0 ? -1 : 1;
+
+        if (t0 > t1) {
+            float tmp = t0;
+            t0 = t1;
+            t1 = tmp;
+            normalDir = -normalDir;
+        }
+
+        if (t0 > tRange[0]) {
+            tRange[0] = t0;
+            normal.set(0, 0, 0);
+            if (axis == 1) normal.x = normalDir;
+            if (axis == 2) normal.y = normalDir;
+            if (axis == 3) normal.z = normalDir;
+        }
+
+        if (t1 < tRange[1]) {
+            tRange[1] = t1;
+        }
+
+        return tRange[1] >= tRange[0];
     }
 
     @Override
