@@ -8,11 +8,14 @@ import com.badlogic.gdx.graphics.g3d.*;
 import com.badlogic.gdx.graphics.g3d.attributes.TextureAttribute;
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
+import com.badlogic.gdx.graphics.g2d.BitmapFont;
+import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector3;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 
 public class TadjikCraftGame extends ApplicationAdapter {
@@ -47,13 +50,11 @@ public class TadjikCraftGame extends ApplicationAdapter {
 
     private static class RaycastHit {
         final BlockPos pos;
-        final ModelInstance instance;
         final Vector3 normal;
         final float distance;
 
-        RaycastHit(BlockPos pos, ModelInstance instance, Vector3 normal, float distance) {
+        RaycastHit(BlockPos pos, Vector3 normal, float distance) {
             this.pos = pos;
-            this.instance = instance;
             this.normal = normal;
             this.distance = distance;
         }
@@ -69,8 +70,18 @@ public class TadjikCraftGame extends ApplicationAdapter {
     Texture[] blockTextures = new Texture[5];
     int selectedBlock = 0;
 
-    ArrayList<ModelInstance> blocks = new ArrayList<>();
-    Map<BlockPos, ModelInstance> blockLookup = new HashMap<>();
+    Map<BlockPos, ModelInstance> visibleBlocks = new HashMap<>();
+    ArrayList<ModelInstance> visibleList = new ArrayList<>();
+
+    HashSet<BlockPos> extraBlocks = new HashSet<>();
+    HashSet<BlockPos> removedBaseBlocks = new HashSet<>();
+
+    int viewDistance = 72;
+    int lastViewCenterX = Integer.MIN_VALUE;
+    int lastViewCenterZ = Integer.MIN_VALUE;
+
+    static final int PLATFORM_START = 0;
+    static final int PLATFORM_END = 511;
 
     float speed = 5f;
     float camHeight = 1.7f;
@@ -80,11 +91,15 @@ public class TadjikCraftGame extends ApplicationAdapter {
     boolean onGround = false;
 
     ShapeRenderer shape;
+    SpriteBatch spriteBatch;
+    BitmapFont font;
 
     @Override
     public void create() {
         batch = new ModelBatch();
         shape = new ShapeRenderer();
+        spriteBatch = new SpriteBatch();
+        font = new BitmapFont();
 
         camera = new PerspectiveCamera(67, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
         camera.position.set(0, camHeight, 5);
@@ -111,16 +126,9 @@ public class TadjikCraftGame extends ApplicationAdapter {
             VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal | VertexAttributes.Usage.TextureCoordinates
         );
 
-        // платформа 512x512
-        int start = 0;
-        int end = 511;
-        for (int x = start; x <= end; x++) {
-            for (int z = start; z <= end; z++) {
-                addBlockAt(x, 0, z);
-            }
-        }
+        camera.position.set((PLATFORM_END - PLATFORM_START) / 2f, camHeight + 0.1f, PLATFORM_END / 2f + 5);
 
-        camera.position.set((end - start) / 2f, camHeight + 0.1f, end / 2f + 5);
+        refreshVisibleBlocks(true);
     }
 
     @Override
@@ -179,9 +187,11 @@ public class TadjikCraftGame extends ApplicationAdapter {
         Gdx.gl.glClearColor(0.5f, 0.7f, 1f, 1);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT | GL20.GL_DEPTH_BUFFER_BIT);
 
+        refreshVisibleBlocks(false);
+
         // рендер блоков
         batch.begin(camera);
-        for (ModelInstance block : blocks)
+        for (ModelInstance block : visibleList)
             batch.render(block);
         batch.end();
 
@@ -190,6 +200,9 @@ public class TadjikCraftGame extends ApplicationAdapter {
 
         // ломание + установка
         blockRaycast();
+
+        // GUI
+        drawHud();
     }
 
     private void handleInput(float dt) {
@@ -270,7 +283,7 @@ public class TadjikCraftGame extends ApplicationAdapter {
 
     // Raycast ломание и установка
     private void blockRaycast() {
-        RaycastHit hit = findBlockHit(4f);
+        RaycastHit hit = findBlockHit(5f);
         if (hit == null) return;
 
         // ЛОМАНИЕ
@@ -285,24 +298,33 @@ public class TadjikCraftGame extends ApplicationAdapter {
                 hit.pos.y + Math.round(hit.normal.y),
                 hit.pos.z + Math.round(hit.normal.z)
             );
-            if (!blockLookup.containsKey(target)) {
-                addBlockAt(target.x, target.y, target.z);
-            }
+            addBlockAt(target.x, target.y, target.z);
         }
     }
 
     private void addBlockAt(int x, int y, int z) {
         BlockPos pos = new BlockPos(x, y, z);
-        if (blockLookup.containsKey(pos)) return;
-        ModelInstance inst = new ModelInstance(cubeModel, x, y, z);
-        blockLookup.put(pos, inst);
-        blocks.add(inst);
+        if (isBlockPresent(pos)) return;
+        if (isBaseBlock(pos)) {
+            removedBaseBlocks.remove(pos);
+        } else {
+            extraBlocks.add(pos);
+        }
+
+        if (isWithinView(pos)) {
+            ensureVisible(pos);
+        }
     }
 
     private void removeBlock(BlockPos pos) {
-        ModelInstance inst = blockLookup.remove(pos);
+        if (extraBlocks.remove(pos)) {
+            // removed extra block
+        } else if (isBaseBlock(pos)) {
+            removedBaseBlocks.add(pos);
+        }
+        ModelInstance inst = visibleBlocks.remove(pos);
         if (inst != null) {
-            blocks.remove(inst);
+            visibleList.remove(inst);
         }
     }
 
@@ -322,7 +344,7 @@ public class TadjikCraftGame extends ApplicationAdapter {
             for (int y = minY; y <= maxY; y++) {
                 for (int z = minZ; z <= maxZ; z++) {
                     BlockPos pos = new BlockPos(x, y, z);
-                    if (!blockLookup.containsKey(pos)) continue;
+                    if (!isBlockPresent(pos)) continue;
 
                     float blockMinX = x - 0.5f;
                     float blockMaxX = x + 0.5f;
@@ -349,7 +371,7 @@ public class TadjikCraftGame extends ApplicationAdapter {
         int maxY = (int)Math.floor(pos.y);
 
         for (int y = maxY; y >= -64; y--) {
-            if (blockLookup.containsKey(new BlockPos(bx, y, bz))) {
+            if (isBlockPresent(new BlockPos(bx, y, bz))) {
                 return y + 0.5f;
             }
         }
@@ -360,63 +382,50 @@ public class TadjikCraftGame extends ApplicationAdapter {
         Vector3 origin = new Vector3(camera.position);
         Vector3 dir = new Vector3(camera.direction).nor();
 
-        RaycastHit bestHit = null;
+        int bx = MathUtils.floor(origin.x + 0.5f);
+        int by = MathUtils.floor(origin.y + 0.5f);
+        int bz = MathUtils.floor(origin.z + 0.5f);
 
-        for (Map.Entry<BlockPos, ModelInstance> entry : blockLookup.entrySet()) {
-            BlockPos pos = entry.getKey();
-            Vector3 min = new Vector3(pos.x - 0.5f, pos.y - 0.5f, pos.z - 0.5f);
-            Vector3 max = new Vector3(pos.x + 0.5f, pos.y + 0.5f, pos.z + 0.5f);
+        int stepX = dir.x > 0 ? 1 : dir.x < 0 ? -1 : 0;
+        int stepY = dir.y > 0 ? 1 : dir.y < 0 ? -1 : 0;
+        int stepZ = dir.z > 0 ? 1 : dir.z < 0 ? -1 : 0;
 
-            float[] tRange = new float[]{0f, maxDistance};
-            Vector3 hitNormal = new Vector3();
+        float tMaxX = stepX == 0 ? Float.POSITIVE_INFINITY : ((bx + (stepX > 0 ? 0.5f : -0.5f)) - origin.x) / dir.x;
+        float tMaxY = stepY == 0 ? Float.POSITIVE_INFINITY : ((by + (stepY > 0 ? 0.5f : -0.5f)) - origin.y) / dir.y;
+        float tMaxZ = stepZ == 0 ? Float.POSITIVE_INFINITY : ((bz + (stepZ > 0 ? 0.5f : -0.5f)) - origin.z) / dir.z;
 
-            if (!intersectAxis(origin.x, dir.x, min.x, max.x, hitNormal, 1, tRange)) continue;
-            if (!intersectAxis(origin.y, dir.y, min.y, max.y, hitNormal, 2, tRange)) continue;
-            if (!intersectAxis(origin.z, dir.z, min.z, max.z, hitNormal, 3, tRange)) continue;
+        float tDeltaX = stepX == 0 ? Float.POSITIVE_INFINITY : 1f / Math.abs(dir.x);
+        float tDeltaY = stepY == 0 ? Float.POSITIVE_INFINITY : 1f / Math.abs(dir.y);
+        float tDeltaZ = stepZ == 0 ? Float.POSITIVE_INFINITY : 1f / Math.abs(dir.z);
 
-            float tMin = tRange[0];
+        Vector3 normal = new Vector3();
+        float distance = 0f;
 
-            if (tMin < 0 || tMin > maxDistance) continue;
+        for (int i = 0; i < 200 && distance <= maxDistance; i++) {
+            BlockPos pos = new BlockPos(bx, by, bz);
+            if (isBlockPresent(pos)) {
+                return new RaycastHit(pos, new Vector3(normal), distance);
+            }
 
-            if (bestHit == null || tMin < bestHit.distance) {
-                bestHit = new RaycastHit(pos, entry.getValue(), new Vector3(hitNormal), tMin);
+            if (tMaxX < tMaxY && tMaxX < tMaxZ) {
+                bx += stepX;
+                distance = tMaxX;
+                tMaxX += tDeltaX;
+                normal.set(-stepX, 0, 0);
+            } else if (tMaxY < tMaxZ) {
+                by += stepY;
+                distance = tMaxY;
+                tMaxY += tDeltaY;
+                normal.set(0, -stepY, 0);
+            } else {
+                bz += stepZ;
+                distance = tMaxZ;
+                tMaxZ += tDeltaZ;
+                normal.set(0, 0, -stepZ);
             }
         }
 
-        return bestHit;
-    }
-
-    private boolean intersectAxis(float origin, float dir, float min, float max, Vector3 normal, int axis, float[] tRange) {
-        if (Math.abs(dir) < 0.0001f) {
-            return origin >= min && origin <= max;
-        }
-
-        float invD = 1f / dir;
-        float t0 = (min - origin) * invD;
-        float t1 = (max - origin) * invD;
-
-        int normalDir = invD >= 0 ? -1 : 1;
-
-        if (t0 > t1) {
-            float tmp = t0;
-            t0 = t1;
-            t1 = tmp;
-            normalDir = -normalDir;
-        }
-
-        if (t0 > tRange[0]) {
-            tRange[0] = t0;
-            normal.set(0, 0, 0);
-            if (axis == 1) normal.x = normalDir;
-            if (axis == 2) normal.y = normalDir;
-            if (axis == 3) normal.z = normalDir;
-        }
-
-        if (t1 < tRange[1]) {
-            tRange[1] = t1;
-        }
-
-        return tRange[1] >= tRange[0];
+        return null;
     }
 
     @Override
@@ -425,5 +434,83 @@ public class TadjikCraftGame extends ApplicationAdapter {
         cubeModel.dispose();
         for (Texture t : blockTextures) t.dispose();
         shape.dispose();
+        spriteBatch.dispose();
+        font.dispose();
+    }
+
+    private boolean isBaseBlock(BlockPos pos) {
+        return pos.y == 0 && pos.x >= PLATFORM_START && pos.x <= PLATFORM_END && pos.z >= PLATFORM_START && pos.z <= PLATFORM_END;
+    }
+
+    private boolean isBlockPresent(BlockPos pos) {
+        if (extraBlocks.contains(pos)) return true;
+        if (isBaseBlock(pos) && !removedBaseBlocks.contains(pos)) return true;
+        return false;
+    }
+
+    private boolean isWithinView(BlockPos pos) {
+        float dx = pos.x + 0.5f - camera.position.x;
+        float dz = pos.z + 0.5f - camera.position.z;
+        return dx * dx + dz * dz <= viewDistance * viewDistance;
+    }
+
+    private void ensureVisible(BlockPos pos) {
+        if (visibleBlocks.containsKey(pos)) return;
+        ModelInstance inst = new ModelInstance(cubeModel, pos.x, pos.y, pos.z);
+        visibleBlocks.put(pos, inst);
+        visibleList.add(inst);
+    }
+
+    private void refreshVisibleBlocks(boolean force) {
+        int cx = MathUtils.floor(camera.position.x + 0.5f);
+        int cz = MathUtils.floor(camera.position.z + 0.5f);
+
+        if (!force && cx == lastViewCenterX && cz == lastViewCenterZ) return;
+
+        lastViewCenterX = cx;
+        lastViewCenterZ = cz;
+
+        ArrayList<BlockPos> toRemove = new ArrayList<>();
+        for (BlockPos pos : visibleBlocks.keySet()) {
+            if (!isWithinView(pos)) {
+                toRemove.add(pos);
+            }
+        }
+        for (BlockPos pos : toRemove) {
+            ModelInstance inst = visibleBlocks.remove(pos);
+            if (inst != null) visibleList.remove(inst);
+        }
+
+        int minX = cx - viewDistance;
+        int maxX = cx + viewDistance;
+        int minZ = cz - viewDistance;
+        int maxZ = cz + viewDistance;
+
+        for (int x = minX; x <= maxX; x++) {
+            if (x < PLATFORM_START || x > PLATFORM_END) continue;
+            for (int z = minZ; z <= maxZ; z++) {
+                if (z < PLATFORM_START || z > PLATFORM_END) continue;
+                BlockPos pos = new BlockPos(x, 0, z);
+                if (removedBaseBlocks.contains(pos)) continue;
+                ensureVisible(pos);
+            }
+        }
+
+        for (BlockPos pos : extraBlocks) {
+            if (isWithinView(pos)) {
+                ensureVisible(pos);
+            }
+        }
+    }
+
+    private void drawHud() {
+        spriteBatch.begin();
+        String blockStr = "Блок: " + (selectedBlock + 1);
+        String fps = "FPS: " + Gdx.graphics.getFramesPerSecond();
+        spriteBatch.setColor(Color.WHITE);
+        font.draw(spriteBatch, fps, 10, Gdx.graphics.getHeight() - 10);
+        font.draw(spriteBatch, blockStr, 10, Gdx.graphics.getHeight() - 30);
+        font.draw(spriteBatch, "WASD — движение | ЛКМ ломать | ПКМ ставить | ESC пауза", 10, 40);
+        spriteBatch.end();
     }
 }
