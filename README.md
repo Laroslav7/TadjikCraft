@@ -1,33 +1,40 @@
 # TadjikCraft
 
-A [libGDX](https://libgdx.com/) project generated with [gdx-liftoff](https://github.com/libgdx/gdx-liftoff).
+A voxel sandbox inspired by Minecraft, built on [libGDX](https://libgdx.com/) + LWJGL3.
 
-This project was generated with a template including simple application launchers and an `ApplicationAdapter` extension that draws libGDX logo.
+## What was improved
 
-## Platforms
+- Procedural terrain generation with biomes (grass / sand / snow), hills, and trees.
+- Multiple block types with hotbar-like selection (`1..7`).
+- Better mining/building via short raycast targeting.
+- Day/night lighting cycle.
+- Sprinting, jumping, optional fly mode (`F`), and HUD + crosshair.
+- Vulkan API capability check in desktop launcher (`TADJIKCRAFT_RENDERER=vulkan`) with OpenGL fallback.
 
-- `core`: Main module with the application logic shared by all platforms.
-- `lwjgl3`: Primary desktop platform using LWJGL3; was called 'desktop' in older docs.
+## Controls
 
-## Gradle
+- `WASD` — move
+- `SHIFT` — sprint
+- `SPACE` — jump (or fly up in fly mode)
+- `CTRL` — fly down (fly mode)
+- `F` — toggle fly mode
+- `1..7` — select block type
+- `LMB` — break block
+- `RMB` — place selected block
+- `ESC` — release/capture mouse
 
-This project uses [Gradle](https://gradle.org/) to manage dependencies.
-The Gradle wrapper was included, so you can run Gradle tasks using `gradlew.bat` or `./gradlew` commands.
-Useful Gradle tasks and flags:
+## Vulkan note
 
-- `--continue`: when using this flag, errors will not stop the tasks from running.
-- `--daemon`: thanks to this flag, Gradle daemon will be used to run chosen tasks.
-- `--offline`: when using this flag, cached dependency archives will be used.
-- `--refresh-dependencies`: this flag forces validation of all dependencies. Useful for snapshot versions.
-- `build`: builds sources and archives of every project.
-- `cleanEclipse`: removes Eclipse project data.
-- `cleanIdea`: removes IntelliJ project data.
-- `clean`: removes `build` folders, which store compiled classes and built archives.
-- `eclipse`: generates Eclipse project data.
-- `idea`: generates IntelliJ project data.
-- `lwjgl3:jar`: builds application's runnable jar, which can be found at `lwjgl3/build/libs`.
-- `lwjgl3:run`: starts the application.
-- `test`: runs unit tests (if any).
+Current libGDX rendering still uses OpenGL under LWJGL3. The launcher now probes Vulkan support via GLFW and can be started with:
 
-Note that most tasks that are not specific to a single project can be run with `name:` prefix, where the `name` should be replaced with the ID of a specific project.
-For example, `core:clean` removes `build` folder only from the `core` project.
+```bash
+TADJIKCRAFT_RENDERER=vulkan ./gradlew lwjgl3:run
+```
+
+If Vulkan is unavailable, the game falls back to OpenGL.
+
+## Run
+
+```bash
+./gradlew lwjgl3:run
+```
