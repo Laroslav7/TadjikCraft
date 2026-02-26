@@ -153,8 +153,6 @@ public class TadjikCraftGame extends ApplicationAdapter {
 
         shader.bind();
         shader.setUniformMatrix("u_projViewTrans", camera.combined);
-        terrainTexture.bind();
-        shader.setUniformi("u_texture", 0);
 
         drawWorld(dayLight);
         drawHud(dayLight);
@@ -171,6 +169,8 @@ public class TadjikCraftGame extends ApplicationAdapter {
 
             modelMatrix.idt().translate(pos.x, pos.y, pos.z);
             shader.setUniformMatrix("u_model", modelMatrix);
+            terrainTexture.bind(0);
+            shader.setUniformi("u_texture", 0);
 
             Color tint = type.tint;
             shader.setUniformf("u_tint", tint.r * dayLight, tint.g * dayLight, tint.b * dayLight, 1f);
@@ -189,14 +189,20 @@ public class TadjikCraftGame extends ApplicationAdapter {
 
     private void drawHud(float dayLight) {
         batch.begin();
+        String status = "Mode: " + (flyMode ? "FLY" : (onGround ? "GROUND" : "AIR"));
         font.draw(batch,
-            "WASD move | SPACE jump | SHIFT sprint | F fly: " + (flyMode ? "ON" : "OFF") + " | 1-7 block type",
+            "WASD move | SPACE jump | SHIFT sprint | F fly | LMB break | RMB place",
             12,
             Gdx.graphics.getHeight() - 12);
         font.draw(batch,
-            "Selected: " + selectedBlock.name() + " | Blocks: " + worldBlocks.size() + " | Daylight: " + MathUtils.round(dayLight * 100f) + "%",
+            "Selected: " + selectedBlock.name() + " | Blocks: " + worldBlocks.size() + " | Daylight: " + MathUtils.round(dayLight * 100f) + "% | " + status,
             12,
             Gdx.graphics.getHeight() - 34);
+        font.draw(batch,
+            "XYZ: " + MathUtils.floor(camera.position.x) + " / " + MathUtils.floor(camera.position.y) + " / " + MathUtils.floor(camera.position.z) +
+                " | FPS: " + Gdx.graphics.getFramesPerSecond(),
+            12,
+            Gdx.graphics.getHeight() - 56);
         batch.draw(hand, Gdx.graphics.getWidth() - 230, -42, 280, 280);
         batch.end();
 
@@ -206,7 +212,47 @@ public class TadjikCraftGame extends ApplicationAdapter {
         float cy = Gdx.graphics.getHeight() / 2f;
         shapeRenderer.rect(cx - 1f, cy - 8f, 2f, 16f);
         shapeRenderer.rect(cx - 8f, cy - 1f, 16f, 2f);
+        drawHearts();
+        drawHotbar();
         shapeRenderer.end();
+    }
+
+    private void drawHearts() {
+        float baseX = 14f;
+        float baseY = 16f;
+        for (int i = 0; i < 10; i++) {
+            float x = baseX + i * 16f;
+            float healthPulse = onGround ? 1f : 0.75f;
+            shapeRenderer.setColor(0.25f, 0.06f, 0.06f, 0.9f);
+            shapeRenderer.rect(x, baseY, 12f, 12f);
+            shapeRenderer.setColor(0.94f * healthPulse, 0.22f, 0.22f, 0.95f);
+            shapeRenderer.rect(x + 2f, baseY + 2f, 8f, 8f);
+        }
+    }
+
+    private void drawHotbar() {
+        float slot = 42f;
+        float gap = 4f;
+        float barWidth = slot * 7f + gap * 6f;
+        float startX = (Gdx.graphics.getWidth() - barWidth) / 2f;
+        float y = 18f;
+
+        for (int i = 0; i < 7; i++) {
+            float x = startX + i * (slot + gap);
+            boolean selected = selectedBlock.slot == i + 1;
+            shapeRenderer.setColor(0.05f, 0.05f, 0.05f, 0.8f);
+            shapeRenderer.rect(x, y, slot, slot);
+            Color c = BlockType.fromSlot(i + 1).tint;
+            shapeRenderer.setColor(c.r, c.g, c.b, 0.95f);
+            shapeRenderer.rect(x + 6f, y + 6f, slot - 12f, slot - 12f);
+            if (selected) {
+                shapeRenderer.setColor(0.97f, 0.92f, 0.42f, 0.95f);
+                shapeRenderer.rect(x - 2f, y - 2f, slot + 4f, 2f);
+                shapeRenderer.rect(x - 2f, y + slot, slot + 4f, 2f);
+                shapeRenderer.rect(x - 2f, y, 2f, slot);
+                shapeRenderer.rect(x + slot, y, 2f, slot);
+            }
+        }
     }
 
     private void handleModeSwitch() {
@@ -298,13 +344,11 @@ public class TadjikCraftGame extends ApplicationAdapter {
     }
 
     private void handleBlockSelection() {
-        if (Gdx.input.isKeyJustPressed(Input.Keys.NUM_1)) selectedBlock = BlockType.GRASS;
-        if (Gdx.input.isKeyJustPressed(Input.Keys.NUM_2)) selectedBlock = BlockType.DIRT;
-        if (Gdx.input.isKeyJustPressed(Input.Keys.NUM_3)) selectedBlock = BlockType.STONE;
-        if (Gdx.input.isKeyJustPressed(Input.Keys.NUM_4)) selectedBlock = BlockType.SAND;
-        if (Gdx.input.isKeyJustPressed(Input.Keys.NUM_5)) selectedBlock = BlockType.WOOD;
-        if (Gdx.input.isKeyJustPressed(Input.Keys.NUM_6)) selectedBlock = BlockType.LEAVES;
-        if (Gdx.input.isKeyJustPressed(Input.Keys.NUM_7)) selectedBlock = BlockType.SNOW;
+        for (int i = 1; i <= 7; i++) {
+            if (Gdx.input.isKeyJustPressed(Input.Keys.NUM_0 + i)) {
+                selectedBlock = BlockType.fromSlot(i);
+            }
+        }
     }
 
     private void handleBlocks() {
@@ -360,30 +404,52 @@ public class TadjikCraftGame extends ApplicationAdapter {
     private Mesh createCubeMesh() {
         float[] vertices = {
             // Front
-            0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1,
-            0, 0, 1, 0, 0, 1, 1, 1, 1, 1, 0, 1, 1, 0, 1,
+            0, 0, 1, 0, 0,
+            1, 0, 1, 1, 0,
+            1, 1, 1, 1, 1,
+            0, 1, 1, 0, 1,
             // Back
-            1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1,
-            1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 1, 0, 1,
+            1, 0, 0, 0, 0,
+            0, 0, 0, 1, 0,
+            0, 1, 0, 1, 1,
+            1, 1, 0, 0, 1,
             // Left
-            0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1,
-            0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 1, 1, 0, 1,
+            0, 0, 0, 0, 0,
+            0, 0, 1, 1, 0,
+            0, 1, 1, 1, 1,
+            0, 1, 0, 0, 1,
             // Right
-            1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 1, 1,
-            1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1,
+            1, 0, 1, 0, 0,
+            1, 0, 0, 1, 0,
+            1, 1, 0, 1, 1,
+            1, 1, 1, 0, 1,
             // Top
-            0, 1, 1, 0, 0, 1, 1, 1, 1, 0, 1, 1, 0, 1, 1,
-            0, 1, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1,
+            0, 1, 1, 0, 0,
+            1, 1, 1, 1, 0,
+            1, 1, 0, 1, 1,
+            0, 1, 0, 0, 1,
             // Bottom
-            0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 1, 1, 1,
-            0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 1, 0, 1
+            0, 0, 0, 0, 0,
+            1, 0, 0, 1, 0,
+            1, 0, 1, 1, 1,
+            0, 0, 1, 0, 1
         };
 
-        Mesh mesh = new Mesh(true, vertices.length / 5, 0,
+        short[] indices = {
+            0, 1, 2, 2, 3, 0,
+            4, 5, 6, 6, 7, 4,
+            8, 9, 10, 10, 11, 8,
+            12, 13, 14, 14, 15, 12,
+            16, 17, 18, 18, 19, 16,
+            20, 21, 22, 22, 23, 20
+        };
+
+        Mesh mesh = new Mesh(true, vertices.length / 5, indices.length,
             new VertexAttribute(VertexAttributes.Usage.Position, 3, "a_position"),
             new VertexAttribute(VertexAttributes.Usage.TextureCoordinates, 2, "a_texCoord0")
         );
         mesh.setVertices(vertices);
+        mesh.setIndices(indices);
         return mesh;
     }
 
@@ -406,18 +472,29 @@ public class TadjikCraftGame extends ApplicationAdapter {
     }
 
     private enum BlockType {
-        GRASS(new Color(0.62f, 0.82f, 0.55f, 1f)),
-        DIRT(new Color(0.70f, 0.54f, 0.41f, 1f)),
-        STONE(new Color(0.70f, 0.70f, 0.73f, 1f)),
-        SAND(new Color(0.90f, 0.84f, 0.58f, 1f)),
-        WOOD(new Color(0.66f, 0.50f, 0.30f, 1f)),
-        LEAVES(new Color(0.44f, 0.72f, 0.40f, 1f)),
-        SNOW(new Color(0.95f, 0.96f, 1.0f, 1f));
+        GRASS(1, new Color(0.62f, 0.82f, 0.55f, 1f)),
+        DIRT(2, new Color(0.70f, 0.54f, 0.41f, 1f)),
+        STONE(3, new Color(0.70f, 0.70f, 0.73f, 1f)),
+        SAND(4, new Color(0.90f, 0.84f, 0.58f, 1f)),
+        WOOD(5, new Color(0.66f, 0.50f, 0.30f, 1f)),
+        LEAVES(6, new Color(0.44f, 0.72f, 0.40f, 1f)),
+        SNOW(7, new Color(0.95f, 0.96f, 1.0f, 1f));
 
+        final int slot;
         final Color tint;
 
-        BlockType(Color tint) {
+        BlockType(int slot, Color tint) {
+            this.slot = slot;
             this.tint = tint;
+        }
+
+        static BlockType fromSlot(int slot) {
+            for (BlockType value : values()) {
+                if (value.slot == slot) {
+                    return value;
+                }
+            }
+            return GRASS;
         }
     }
 
